@@ -1,5 +1,4 @@
 /*
-Copyright © 2021 Josh Eveleth
 This file is part of CLI application standupdate
 */
 package cmd
@@ -13,6 +12,7 @@ import (
 
 	"github.com/slack-go/slack"
 	"github.com/spf13/cobra"
+	"gopkg.in/validator.v2"
 
 	"github.com/manifoldco/promptui"
 )
@@ -21,12 +21,37 @@ var SlackToken = os.Getenv("SLACK_TOKEN")
 var ChannelID = os.Getenv("CHANNEL_ID")
 
 type TotalItems struct {
+	Name      string
 	Yesterday []string
 	Today     []string
 	Blockers  []string
 }
+type UserInfo struct {
+	Name string `validate:"nonzero"`
+}
 
 const myRange = "{{range $val := .}}• {{$val}}\n{{end}}"
+
+var AllItems TotalItems
+
+func GetName() error {
+	prompt := promptui.Prompt{
+		Label: "Name",
+	}
+	result, err := prompt.Run()
+
+	if err != nil {
+		fmt.Printf("Prompt failed %v\n", err)
+		return err
+	}
+
+	user := UserInfo{Name: result}
+	if errs := validator.Validate(user); errs != nil {
+		return errs
+	}
+	AllItems.Name = user.Name
+	return nil
+}
 
 func ReturnFormattedUpdate(items []string) string {
 	var buf bytes.Buffer
@@ -46,6 +71,7 @@ func AddSection(info string) *slack.SectionBlock {
 
 func NotifySlack(items TotalItems) {
 	api := slack.New(SlackToken)
+	nameSection := AddSection(fmt.Sprintf("*Name*: %s", items.Name))
 
 	yHeaderSection := AddSection("*Yesterday*")
 	yesterday := AddSection(ReturnFormattedUpdate(items.Yesterday))
@@ -65,6 +91,7 @@ func NotifySlack(items TotalItems) {
 	}
 
 	expectedBlocks := []slack.Block{
+		nameSection,
 		yHeaderSection,
 		yesterday,
 		tHeaderSection,
@@ -78,8 +105,6 @@ func NotifySlack(items TotalItems) {
 	}
 }
 
-var AllItems TotalItems
-
 func SelectSection() (string, error) {
 	prompt := promptui.Select{
 		Label: "Select Section",
@@ -91,16 +116,36 @@ func SelectSection() (string, error) {
 	return result, nil
 }
 
-func WholeShebang(result string) {
-	switch result {
-	case "Yesterday":
-		_, _ = DoWorkFlow(result)
-	case "Today":
-		_, _ = DoWorkFlow(result)
-	case "Blockers":
-		_, _ = DoWorkFlow(result)
-	case "Done":
-		NotifySlack(AllItems)
+func RunAgain(result string) (string, error) {
+	fmt.Printf("Another item for %v?\n", result)
+	again := promptui.Select{
+		Label: "Select Yes/No",
+		Items: []string{"Yes", "No"},
+	}
+	_, result, err := again.Run()
+	FailErr(fmt.Sprintf("Prompt failed for %v\n", result), err)
+	return result, nil
+}
+
+func AddItem(result string) (string, error) {
+	var item string
+	fmt.Printf("Updates for %q\n", result)
+	input := func(input string) error {
+		return nil
+	}
+	prompt := promptui.Prompt{
+		Label:    "Item",
+		Validate: input,
+		Default:  item,
+	}
+	result, err := prompt.Run()
+	FailErr("Prompt failed", err)
+	return result, nil
+}
+
+func FailErr(errMsg string, err error) {
+	if err != nil {
+		log.Fatalf("%s : %v\n", errMsg, err)
 	}
 }
 
@@ -130,36 +175,16 @@ func DoWorkFlow(result string) (string, error) {
 	return result, nil
 }
 
-func RunAgain(result string) (string, error) {
-	fmt.Printf("Another item for %v?\n", result)
-	again := promptui.Select{
-		Label: "Select Yes/No",
-		Items: []string{"Yes", "No"},
-	}
-	_, result, err := again.Run()
-	FailErr(fmt.Sprintf("Prompt failed for %v\n", result), err)
-	return result, nil
-}
-
-func AddItem(result string) (string, error) {
-	var item string
-	fmt.Printf("What did you do %q?\n", result)
-	input := func(input string) error {
-		return nil
-	}
-	prompt := promptui.Prompt{
-		Label:    "Item",
-		Validate: input,
-		Default:  item,
-	}
-	result, err := prompt.Run()
-	FailErr("Prompt failed", err)
-	return result, nil
-}
-
-func FailErr(errMsg string, err error) {
-	if err != nil {
-		log.Fatalf("%s : %v\n", errMsg, err)
+func WholeShebang(result string) {
+	switch result {
+	case "Yesterday":
+		_, _ = DoWorkFlow(result)
+	case "Today":
+		_, _ = DoWorkFlow(result)
+	case "Blockers":
+		_, _ = DoWorkFlow(result)
+	case "Done":
+		NotifySlack(AllItems)
 	}
 }
 
@@ -174,6 +199,11 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		err := GetName()
+		if err != nil {
+			log.Fatalf("error getting name:%v", err)
+		}
+
 		result, err := SelectSection()
 		FailErr("Prompt failed", err)
 		WholeShebang(result)
