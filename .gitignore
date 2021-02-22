@@ -15,5 +15,3 @@
 # vendor/
 
 .vscode/
-
-go.sum
